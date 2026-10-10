@@ -182,7 +182,7 @@
 
         /* ══ REPORT TYPES GRID ════════════════════════════════ */
         .report-types-grid {
-            display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px;
+            display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px;
         }
         .report-type-card {
             background: var(--surface-white); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
@@ -265,6 +265,19 @@
         table.report-table th { background: var(--navy-900); color: #fff; padding: 12px 16px; text-align: left; font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; }
         table.report-table td { padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); }
         table.report-table tr:nth-child(even) { background: var(--bg-main); }
+        .report-pagination {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            margin: -20px 0 32px; color: var(--text-secondary); font-size: 12px;
+        }
+        .report-pagination-controls { display: flex; align-items: center; gap: 8px; }
+        .report-pagination button {
+            padding: 6px 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+            background: var(--surface-white); color: var(--text-primary); font: inherit; font-weight: 600;
+            cursor: pointer;
+        }
+        .report-pagination button:hover:not(:disabled) { background: var(--navy-50); }
+        .report-pagination button:disabled { color: var(--text-muted); cursor: not-allowed; opacity: 0.6; }
+        .report-pagination-page { min-width: 72px; text-align: center; font-weight: 600; }
 
         .frequency-note {
             margin-bottom: 16px; padding: 14px 18px; border: 1px solid var(--amber-border);
@@ -331,6 +344,8 @@
             .report-document-container {
                 border: none !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important;
             }
+            .report-pagination { display: none !important; }
+            table.report-table tbody tr[hidden] { display: table-row !important; }
             .village-letterhead { border-bottom: 2px solid #000 !important; }
             table.report-table th { background: #0f172a !important; color: #fff !important; -webkit-print-color-adjust: exact; }
         }
@@ -451,7 +466,7 @@
         </div>
         <div style="display:flex; gap:12px; flex-wrap:wrap;">
             <!-- Restored CSV Export Button -->
-            <a id="exportCsvBtn" href="{{ url_for('admin_reports_export', type=selected_type or 'village', timeframe=timeframe or '7d', zone=zone or 'all', severity=severity or 'all', start_date=start_date or '', end_date=end_date or '') }}" class="btn-generate btn-secondary">
+            <a id="exportCsvBtn" href="{{ url_for('admin_reports_export', type=selected_type or 'incident', timeframe=timeframe or '7d', zone=zone or 'all', severity=severity or 'all', start_date=start_date or '', end_date=end_date or '') }}" class="btn-generate btn-secondary">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Export CSV Data
             </a>
@@ -466,16 +481,6 @@
 
         <!-- 1. SELECT REPORT TYPE CARDS -->
         <div class="report-types-grid">
-            <div class="report-type-card {% if selected_type == 'village' or not selected_type %}active{% endif %}" onclick="selectReportType('village', 'Village-Wide Security Report')">
-                <div>
-                    <div class="report-icon">
-                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-                    </div>
-                    <div class="report-card-title">Village-Wide Report</div>
-                    <div class="report-card-desc">Comprehensive summary of whole community security and overall operations.</div>
-                </div>
-            </div>
-
             <div class="report-type-card {% if selected_type == 'incident' %}active{% endif %}" onclick="selectReportType('incident', 'Security Incident Report')">
                 <div>
                     <div class="report-icon" style="background:var(--danger);">
@@ -511,7 +516,7 @@
         <div class="filter-card">
             <!-- Restored form ID -->
             <form id="reportFilterForm" action="{{ url_for('admin_reports') }}" method="GET" class="filter-form">
-                <input type="hidden" id="typeInput" name="type" value="{{ selected_type or 'village' }}">
+                <input type="hidden" id="typeInput" name="type" value="{{ selected_type or 'incident' }}">
                 <div class="field">
                     <label for="timeFrame">Time Frame</label>
                     <select id="timeFrame" name="timeframe" onchange="toggleCustomDates()">
@@ -586,7 +591,7 @@
 
             <!-- DOCUMENT TITLE -->
             <div class="document-title-block">
-                <h3 id="reportHeadingTitle">{{ report_title or 'Village-Wide Security Summary Report' }}</h3>
+                <h3 id="reportHeadingTitle">{{ report_title or 'Security Incident Report' }}</h3>
                 <p>Automated Surveillance Analytics & Incident Audit Summary</p>
             </div>
 
@@ -880,6 +885,75 @@
             profileDropdown.classList.remove('open');
         });
     }
+
+    function addReportTablePagination(table, pageSize = 10) {
+        const body = table.tBodies[0];
+        if (!body) return;
+
+        const rows = Array.from(body.rows).filter(row => !row.querySelector('.analytics-empty'));
+        if (rows.length <= pageSize) return;
+
+        const pageCount = Math.ceil(rows.length / pageSize);
+        let currentPage = 1;
+
+        const pagination = document.createElement('nav');
+        pagination.className = 'report-pagination';
+        pagination.setAttribute('aria-label', 'Report table pages');
+
+        const range = document.createElement('span');
+        range.setAttribute('aria-live', 'polite');
+
+        const controls = document.createElement('div');
+        controls.className = 'report-pagination-controls';
+
+        const previous = document.createElement('button');
+        previous.type = 'button';
+        previous.textContent = 'Previous';
+        previous.setAttribute('aria-label', 'Previous report table page');
+
+        const pageLabel = document.createElement('span');
+        pageLabel.className = 'report-pagination-page';
+        pageLabel.setAttribute('aria-live', 'polite');
+
+        const next = document.createElement('button');
+        next.type = 'button';
+        next.textContent = 'Next';
+        next.setAttribute('aria-label', 'Next report table page');
+
+        controls.append(previous, pageLabel, next);
+        pagination.append(range, controls);
+        table.insertAdjacentElement('afterend', pagination);
+
+        function renderPage() {
+            const firstRow = (currentPage - 1) * pageSize;
+            rows.forEach((row, index) => {
+                row.hidden = index < firstRow || index >= firstRow + pageSize;
+            });
+            range.textContent = `Showing ${firstRow + 1}–${Math.min(firstRow + pageSize, rows.length)} of ${rows.length}`;
+            pageLabel.textContent = `Page ${currentPage} of ${pageCount}`;
+            previous.disabled = currentPage === 1;
+            next.disabled = currentPage === pageCount;
+        }
+
+        previous.addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage -= 1;
+                renderPage();
+            }
+        });
+        next.addEventListener('click', () => {
+            if (currentPage < pageCount) {
+                currentPage += 1;
+                renderPage();
+            }
+        });
+
+        renderPage();
+    }
+
+    document.querySelectorAll('#printableReport table.report-table').forEach(table => {
+        addReportTablePagination(table);
+    });
 
     // Restored Toggle Custom Dates for Timeframe selection
     function toggleCustomDates() {

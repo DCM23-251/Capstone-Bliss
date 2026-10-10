@@ -1,5 +1,5 @@
 # Start with a robust Python base image
-FROM python:3.13
+FROM python:3.10
 
 # Install system dependencies needed for the headless environment and general Python work
 ENV DEBIAN_FRONTEND noninteractive

@@ -16,3 +16,4 @@ cryptography
 python-dotenv
 setuptools==57.4
 pandas
+gunicorn

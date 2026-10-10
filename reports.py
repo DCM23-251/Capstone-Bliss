@@ -188,7 +188,7 @@ def compute_patrol_priority_summary(events):
 
 def build_report(
     event_log_model,
-    report_type='village',
+    report_type='incident',
     timeframe='7d',
     zone='all',
     severity='all',
@@ -199,7 +199,7 @@ def build_report(
 ):
     """Build the admin report context from security events in EventLog."""
     now = now or datetime.now()
-    report_type = report_type if report_type in REPORT_TITLES else 'village'
+    report_type = report_type if report_type in REPORT_TITLES else 'incident'
     timeframe = timeframe if timeframe in {'24h', '7d', '30d', 'custom'} else '7d'
     severity = severity if severity in {'all', 'critical', 'normal'} else 'all'
 

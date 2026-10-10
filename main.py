@@ -2309,7 +2309,7 @@ def admin_logs():
 def admin_reports():
     report_context = build_report(
         EventLog,
-        report_type=request.args.get('type', 'village'),
+        report_type=request.args.get('type', 'incident'),
         timeframe=request.args.get('timeframe', '7d'),
         zone=request.args.get('zone', 'all'),
         severity=request.args.get('severity', 'all'),
@@ -2325,7 +2325,7 @@ def admin_reports():
 def admin_reports_export():
     report_context = build_report(
         EventLog,
-        report_type=request.args.get('type', 'village'),
+        report_type=request.args.get('type', 'incident'),
         timeframe=request.args.get('timeframe', '7d'),
         zone=request.args.get('zone', 'all'),
         severity=request.args.get('severity', 'all'),
