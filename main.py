@@ -51,10 +51,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from functools import wraps
 import threading
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.image import MIMEImage
 from datetime import datetime, timedelta
 from sqlalchemy import inspect, text, or_
 from sqlalchemy.exc import SQLAlchemyError
@@ -68,10 +64,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or os.urandom(24)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///smart_security.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SMTP_SERVER'] = os.environ.get('SMTP_SERVER', 'smtp.gmail.com')
-app.config['SMTP_PORT'] = int(os.environ.get('SMTP_PORT', '587'))
-app.config['SMTP_USERNAME'] = os.environ.get('SMTP_USERNAME', '')
-app.config['SMTP_PASSWORD'] = os.environ.get('SMTP_PASSWORD', '')
+app.config['RESEND_API_KEY'] = os.environ.get('RESEND_API_KEY', '')
+app.config['RESEND_FROM_EMAIL'] = os.environ.get('RESEND_FROM_EMAIL', 'onboarding@resend.dev')
 app.config['PUBLIC_BASE_URL'] = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
 app.config['PERFORMANCE_SLOW_REQUEST_MS'] = 500
 
@@ -444,7 +438,7 @@ ADMIN_EMAILS = [email.strip().lower() for email in os.environ.get('ADMIN_EMAILS'
 from security import (
     get_user_role, is_admin_user, get_client_ip, record_audit_event,
     get_dashboard_target, encrypt_totp_secret, decrypt_totp_secret,
-    get_or_create_totp_secret, send_security_email,
+    get_or_create_totp_secret, send_security_email, send_transactional_email,
     create_login_email_otp, create_password_reset_token,
     ensure_database_schema, create_admin_user,
     AUDIT_EVENT_TYPES,
@@ -602,10 +596,8 @@ def _build_account_status_email_html(user, approved):
 
 
 def send_account_status_email(user, approved):
-    sender = app.config.get('SMTP_USERNAME')
-    password = app.config.get('SMTP_PASSWORD')
-    if not sender or not password or not user.email:
-        app.logger.warning('Account status email could not be sent because SMTP or recipient settings are missing.')
+    if not user or not user.email:
+        app.logger.warning('Account status email could not be sent because the recipient is missing.')
         return False
 
     status = 'approved' if approved else 'not approved'
@@ -616,17 +608,14 @@ def send_account_status_email(user, approved):
         'Your registration was not approved. Please contact your administrator if you believe this decision was made in error.'
     )
     try:
-        message = MIMEMultipart('alternative')
-        message['From'] = sender
-        message['To'] = user.email
-        message['Subject'] = subject
-        message.attach(MIMEText(body, 'plain', 'utf-8'))
-        message.attach(MIMEText(_build_account_status_email_html(user, approved), 'html', 'utf-8'))
-
-        with smtplib.SMTP(app.config['SMTP_SERVER'], app.config['SMTP_PORT']) as smtp:
-            smtp.starttls()
-            smtp.login(sender, password)
-            smtp.send_message(message)
+        sent = send_transactional_email(
+            user.email,
+            subject,
+            body,
+            _build_account_status_email_html(user, approved),
+        )
+        if not sent:
+            return False
         app.logger.info('Account status email sent.')
         return True
     except Exception:
@@ -638,37 +627,34 @@ def send_email_alert(user_settings, subject, body, image_frame=None):
     if not user_settings or not getattr(user_settings, 'email_alerts_enabled', False):
         return
 
-    sender = app.config['SMTP_USERNAME']
-    password = app.config['SMTP_PASSWORD']
     recipient_email = getattr(user_settings, 'recipient_email', None)
-    if not sender or not password or not recipient_email:
+    if not recipient_email:
+        app.logger.warning('Critical alert email could not be sent because the recipient is missing.')
         return
 
     try:
         html_body = _build_alert_email_html(subject, body, image_frame)
-        msg = MIMEMultipart('mixed')
-        msg['From'] = sender
-        msg['To'] = recipient_email
-        msg['Subject'] = subject
-
-        alternative = MIMEMultipart('alternative')
-        alternative.attach(MIMEText(body or 'Security alert detected.', 'plain', 'utf-8'))
-        alternative.attach(MIMEText(html_body, 'html', 'utf-8'))
-        msg.attach(alternative)
-
+        attachments = []
         if image_frame is not None:
             success, encoded_image = cv2.imencode('.jpg', image_frame)
             if success:
-                image_part = MIMEImage(encoded_image.tobytes(), name='alert.jpg')
-                image_part.add_header('Content-ID', '<alert-image>')
-                image_part.add_header('Content-Disposition', 'inline', filename='alert.jpg')
-                msg.attach(image_part)
+                attachments.append({
+                    'filename': 'alert.jpg',
+                    'content': base64.b64encode(encoded_image.tobytes()).decode('ascii'),
+                    'content_type': 'image/jpeg',
+                    'content_id': 'alert-image',
+                })
+            else:
+                app.logger.warning('Critical alert image could not be encoded; sending alert without the image.')
 
-        with smtplib.SMTP(app.config['SMTP_SERVER'], app.config['SMTP_PORT']) as s:
-            s.starttls()
-            s.login(sender, password)
-            s.send_message(msg)
-        app.logger.info('Critical alert email sent to %s', recipient_email)
+        if send_transactional_email(
+            recipient_email,
+            subject,
+            body or 'Security alert detected.',
+            html_body,
+            attachments=attachments,
+        ):
+            app.logger.info('Critical alert email sent to %s', recipient_email)
     except Exception as e:
         app.logger.warning('Critical alert email failed: %s', e)
 
@@ -1758,12 +1744,16 @@ def login():
                 session['pending_login_user_id'] = user.id
                 session['otp_purpose'] = 'login'
                 code = create_login_email_otp(user)
-                send_security_email(
+                if not send_security_email(
                     user,
                     'Home Detection Security — login verification code',
                     f'Your login verification code is {code}. It expires in 3 minutes.\n\n'
                     f'If you did not request this, please contact your administrator.',
-                )
+                ):
+                    session.pop('pending_login_user_id', None)
+                    session.pop('otp_purpose', None)
+                    flash('We could not send your verification code. Please try signing in again later.', 'danger')
+                    return redirect(url_for('login'))
                 return redirect(url_for('verify_otp', purpose='login'))
             if user.totp_secret and user.totp_enabled:
                 session['pending_login_user_id'] = user.id
@@ -3445,17 +3435,16 @@ def main():
     if args.legacy_otp:
         print("[OTP MODE] Legacy mode active — login verification uses authenticator app (TOTP).")
     else:
-        smtp_user = app.config.get('SMTP_USERNAME', '')
-        smtp_pass = app.config.get('SMTP_PASSWORD', '')
-        if not smtp_user or not smtp_pass:
+        resend_api_key = app.config.get('RESEND_API_KEY', '')
+        if not resend_api_key:
             print(
-                "[WARNING] Email OTP mode is active but SMTP is not configured.\n"
+                "[WARNING] Email OTP mode is active but Resend is not configured.\n"
                 "          Users will NOT receive login verification codes by email.\n"
-                "          Set SMTP_USERNAME and SMTP_PASSWORD in your .env file,\n"
+                "          Set RESEND_API_KEY in your environment,\n"
                 "          or start with --legacy-otp to use the authenticator app instead."
             )
         else:
-            print("[OTP MODE] Email OTP mode active — login verification codes will be sent by email.")
+            print("[OTP MODE] Email OTP mode active — login verification codes will be sent through Resend.")
 
     init_app()
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', '5000')), threaded=True, debug=False)

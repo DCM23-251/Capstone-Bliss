@@ -1,11 +1,11 @@
 import base64
 import hashlib
+import json
 import os
 import secrets
-import smtplib
 from datetime import datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
@@ -124,27 +124,52 @@ def get_or_create_totp_secret(user):
     return secret
 
 
-def send_security_email(user, subject, body, html_body=None):
-    sender = app.config['SMTP_USERNAME']
-    password = app.config['SMTP_PASSWORD']
-    if not sender or not password:
+def send_transactional_email(recipient, subject, body, html_body=None, attachments=None):
+    api_key = app.config.get('RESEND_API_KEY')
+    sender = app.config.get('RESEND_FROM_EMAIL')
+    if not api_key or not sender or not recipient:
+        app.logger.warning('Email delivery could not be attempted because Resend configuration or recipient is missing.')
         return False
+
+    payload = {
+        'from': sender,
+        'to': [recipient],
+        'subject': subject,
+        'text': body or '',
+    }
+    if html_body:
+        payload['html'] = html_body
+    if attachments:
+        payload['attachments'] = attachments
+
+    request = Request(
+        'https://api.resend.com/emails',
+        data=json.dumps(payload).encode('utf-8'),
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        method='POST',
+    )
     try:
-        if html_body:
-            message = MIMEMultipart('alternative')
-            message.attach(MIMEText(body, 'plain'))
-            message.attach(MIMEText(html_body, 'html'))
-        else:
-            message = MIMEText(body, 'plain')
-        message['From'], message['To'], message['Subject'] = sender, user.email, subject
-        with smtplib.SMTP(app.config['SMTP_SERVER'], app.config['SMTP_PORT']) as server:
-            server.starttls()
-            server.login(sender, password)
-            server.send_message(message)
+        with urlopen(request, timeout=10) as response:
+            if not 200 <= response.status < 300:
+                app.logger.warning('Resend email delivery returned HTTP %s.', response.status)
+                return False
         return True
-    except Exception as exc:
-        app.logger.warning('Security email failed: %s', exc)
+    except HTTPError as exc:
+        error_body = exc.read(2048).decode('utf-8', errors='replace')
+        app.logger.warning('Resend email delivery failed with HTTP %s: %s', exc.code, error_body)
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
+        app.logger.warning('Resend email delivery failed: %s', exc)
+    return False
+
+
+def send_security_email(user, subject, body, html_body=None):
+    if not user or not user.email:
+        app.logger.warning('Security email could not be sent because the recipient is missing.')
         return False
+    return send_transactional_email(user.email, subject, body, html_body)
 
 
 def create_email_otp(user):
