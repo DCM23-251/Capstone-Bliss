@@ -1,8 +1,4 @@
-torch
-torchvision
-torchaudio
 ultralytics
-opencv-contrib-python-headless
 Pillow
 flask
 flask-login
@@ -14,6 +10,4 @@ pyotp
 qrcode
 cryptography
 python-dotenv
-setuptools==57.4
 pandas
-gunicorn
