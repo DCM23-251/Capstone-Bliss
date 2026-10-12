@@ -65,7 +65,9 @@
                     <tr>
                         <td style="padding:8px 32px 28px;">
                             <div style="border-top:1px solid #e2e8f5;padding-top:18px;font-size:13px;line-height:1.7;color:#3a4d70;">
-                                {% if account_status %}
+                                {% if account_status and account_status_label == 'Pending approval' %}
+                                This message confirms that your registration is awaiting admin review. We will notify you when the review is complete.
+                                {% elif account_status %}
                                 This message confirms the outcome of your account registration review. If you have questions, please contact your administrator.
                                 {% else %}
                                 Please review the live feed and confirm the status in your dashboard. If this activity looks unfamiliar, verify the camera zone and take appropriate action.

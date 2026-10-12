@@ -606,6 +606,19 @@ def _build_account_status_email_html(user, approved):
     )
 
 
+def _build_registration_pending_email_html(user):
+    return app.jinja_env.get_template('alert_email.html').render(
+        subject='Home Detection Security — registration awaiting approval',
+        alert_title='REGISTRATION RECEIVED',
+        alert_message='Your registration has been received and is awaiting admin approval. We will email you when your account status changes.',
+        timestamp=datetime.utcnow().strftime('%d %b %Y • %H:%M UTC'),
+        has_image=False,
+        account_status=True,
+        account_username=user.username,
+        account_status_label='Pending approval',
+    )
+
+
 def send_account_status_email(user, approved):
     if not user or not user.email:
         app.logger.warning('Account status email could not be sent because the recipient is missing.')
@@ -631,6 +644,30 @@ def send_account_status_email(user, approved):
         return True
     except Exception:
         app.logger.exception('Account status email delivery failed.')
+        return False
+
+
+def send_registration_pending_email(user):
+    if not user or not user.email:
+        app.logger.warning('Registration confirmation email could not be sent because the recipient is missing.')
+        return False
+
+    subject = 'Home Detection Security — registration awaiting approval'
+    body = 'Your registration has been received and is awaiting admin approval. We will email you when your account status changes.'
+    try:
+        sent = send_transactional_email(
+            user.email,
+            subject,
+            body,
+            _build_registration_pending_email_html(user),
+        )
+        if not sent:
+            app.logger.warning('Registration confirmation email delivery failed for user %s.', user.id)
+            return False
+        app.logger.info('Registration confirmation email sent for user %s.', user.id)
+        return True
+    except Exception:
+        app.logger.exception('Registration confirmation email delivery failed for user %s.', user.id)
         return False
 
 
@@ -1728,7 +1765,13 @@ def register():
 
         record_audit_event(new_user.id, 'create', f"Created account for {new_user.username}", 'Auth', get_client_ip())
 
-        flash('Your account was created and is awaiting admin approval. You can sign in after it has been approved.', 'success')
+        if send_registration_pending_email(new_user):
+            flash('Your account was created and is awaiting admin approval. A confirmation email has been sent.', 'success')
+        else:
+            flash(
+                'Your account was created and is awaiting admin approval, but we could not send the confirmation email. Please contact an administrator if needed.',
+                'danger',
+            )
         return redirect(url_for('login'))
     
     return render_template('register.html')
@@ -2190,7 +2233,7 @@ def admin_approve_user(user_id):
     notification_sent = send_account_status_email(user, approved=True)
     message = f'Account for {user.username} approved.'
     if not notification_sent:
-        message += ' The account status email could not be sent; check SMTP configuration and logs.'
+        message += ' The account status email could not be sent; check Resend configuration, sender verification, and logs.'
     return _admin_user_action_response(message, notification_sent=notification_sent)
 
 
@@ -2211,7 +2254,7 @@ def admin_reject_user(user_id):
     notification_sent = send_account_status_email(user, approved=False)
     message = f'Account for {user.username} rejected.'
     if not notification_sent:
-        message += ' The account status email could not be sent; check SMTP configuration and logs.'
+        message += ' The account status email could not be sent; check Resend configuration, sender verification, and logs.'
     return _admin_user_action_response(message, notification_sent=notification_sent)
 
 
