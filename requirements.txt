@@ -11,3 +11,4 @@ qrcode
 cryptography
 python-dotenv
 pandas
+huggingface_hub

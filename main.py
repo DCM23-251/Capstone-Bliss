@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -107,6 +107,17 @@ email_alert_lock = threading.Lock()
 RETENTION_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 _retention_cleanup_thread = None
 _retention_cleanup_wakeup = threading.Event()
+
+def create_default_admin():
+    admin_user = os.environ.get("ADMIN_USERNAME")
+    admin_email = os.environ.get("ADMIN_EMAIL")
+    admin_pass = os.environ.get("ADMIN_PASSWORD")
+    
+    if admin_user and admin_pass:
+        # Check if user exists in SQLite DB; if not, create it
+        if not User.query.filter_by(username=admin_user).first():
+            create_admin_account(admin_user, admin_email, admin_pass)
+            print("Default admin account created successfully!")
 
 
 def predict_with_model_lock(model, model_lock, frame, **kwargs):
@@ -3405,6 +3416,8 @@ def init_app():
     with app.app_context():
         for camera in Camera.query.filter_by(is_active=True).all():
             acquire_stream(camera.user_id, camera)
+
+    create_default_admin()
 
     print("App Initialized.")
 
