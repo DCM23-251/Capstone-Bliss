@@ -114,10 +114,10 @@ def create_default_admin():
     admin_pass = os.environ.get("ADMIN_PASSWORD")
     
     if admin_user and admin_pass:
-        # Check if user exists in SQLite DB; if not, create it
-        if not User.query.filter_by(username=admin_user).first():
-            create_admin_account(admin_user, admin_email, admin_pass)
-            print("Default admin account created successfully!")
+        with app.app_context():
+            if not User.query.filter_by(username=admin_user).first():
+                create_admin_user(admin_user, admin_email, admin_pass)
+                print("Default admin account created successfully!")
 
 
 def predict_with_model_lock(model, model_lock, frame, **kwargs):
