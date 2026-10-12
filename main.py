@@ -3458,7 +3458,7 @@ def main():
             print("[OTP MODE] Email OTP mode active — login verification codes will be sent by email.")
 
     init_app()
-    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', '5000')), threaded=True, debug=False)
     return 0
 
 

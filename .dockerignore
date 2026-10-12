@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+.env
+.pytest_cache
+instance
+users_data
+video_outputs
+datasets
+models
+tests
+.vscode
