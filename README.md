@@ -21,11 +21,13 @@ python fork_main.py
 
 The model weights must be available at `models/best.pt` and `models/yolo26m.pt` for a local run. Override their paths with `YOLO_FIRE_MODEL` and `YOLO_OBJECT_MODEL`.
 
-Open `http://localhost:5000`, then enter an RTSP/RTMP/HTTP(S) stream URL or upload a video. Alternatively, set `VIDEO_SOURCE` before starting the app; a numeric value selects a local camera device. Add face-reference photos in the page, or mount them under `known_faces/<person-name>/`.
+Open `http://localhost:5000`, then enter an RTSP/RTMP/HTTP(S) stream URL in the **Video URL** form and click **Start stream**. Video uploads use a separate form so an accidentally selected, large video is not sent with an RTSP URL. Alternatively, set `VIDEO_SOURCE` before starting the app; a numeric value selects a local camera device. Add face-reference photos in the page, or mount them under `known_faces/<person-name>/`.
 
 ## Railway / Docker
 
 Use `vision_benchmark` as the Railway service root so its `Dockerfile` and `requirements.txt` are used. Set `VIDEO_SOURCE` to a reachable camera/video URL to begin processing automatically, or leave it unset and submit a URL/upload in the web UI. Railway should provide `PORT`.
+
+Video uploads are limited by `MAX_UPLOAD_MB` (default `512`), and the hosting platform or reverse proxy may impose a lower request-size limit. For camera testing, enter the stream link in the URL form rather than using the upload form.
 
 Useful environment overrides:
 

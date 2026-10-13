@@ -524,12 +524,15 @@ PAGE = """<!doctype html>
 <body>
   <h1>Computer Vision Benchmark</h1>
   <p>Dual YOLO detection, face recognition on person ROIs, and KCF tracking between detector passes.</p>
-  <form action="/source" method="post" enctype="multipart/form-data">
+  <form action="/source" method="post">
     <label>Video URL (RTSP/RTMP/HTTP/HTTPS) or local device index:
       <input type="text" name="source" placeholder="https://example/video.mp4">
     </label><br>
-    <label>Or upload a video: <input type="file" name="video" accept=".mp4,.avi,.mkv,.mov,.webm"></label>
-    <button type="submit">Start / replace source</button>
+    <button type="submit">Start stream</button>
+  </form>
+  <form action="/upload" method="post" enctype="multipart/form-data">
+    <label>Or upload a video file: <input type="file" name="video" accept=".mp4,.avi,.mkv,.mov,.webm" required></label>
+    <button type="submit">Upload and start video</button>
   </form>
   <form action="/known-faces" method="post" enctype="multipart/form-data">
     <label>Known person's name: <input name="name" required maxlength="80"></label>
@@ -605,6 +608,10 @@ def _parse_source(value):
     return value
 
 
+def _start_source(source):
+    _replace_pipeline(source)
+
+
 @app.get("/")
 def index():
     return render_template_string(PAGE)
@@ -612,23 +619,41 @@ def index():
 
 @app.post("/source")
 def set_source():
-    uploaded_video = request.files.get("video")
     try:
-        if uploaded_video and uploaded_video.filename:
-            filename = secure_filename(uploaded_video.filename)
-            if Path(filename).suffix.lower() not in VIDEO_EXTENSIONS:
-                return "Unsupported video type.", 400
-            UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-            destination = UPLOADS_DIR / f"{time.time_ns()}_{filename}"
-            uploaded_video.save(destination)
-            source = str(destination)
-        else:
-            source = _parse_source(request.form.get("source"))
-        _replace_pipeline(source)
+        _start_source(_parse_source(request.form.get("source")))
     except (OSError, RuntimeError, ValueError) as exc:
         logger.exception("Could not start requested source")
         return str(exc), 400
     return redirect(url_for("index"))
+
+
+@app.post("/upload")
+def upload_video():
+    uploaded_video = request.files.get("video")
+    if uploaded_video is None or not uploaded_video.filename:
+        return "Choose a video file to upload.", 400
+    filename = secure_filename(uploaded_video.filename)
+    if Path(filename).suffix.lower() not in VIDEO_EXTENSIONS:
+        return "Unsupported video type.", 400
+    try:
+        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        destination = UPLOADS_DIR / f"{time.time_ns()}_{filename}"
+        uploaded_video.save(destination)
+        _start_source(str(destination))
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.exception("Could not upload or start video")
+        return str(exc), 400
+    return redirect(url_for("index"))
+
+
+@app.errorhandler(413)
+def request_entity_too_large(_error):
+    return (
+        "Request too large. RTSP links should be submitted with Start stream, not as an uploaded file. "
+        f"Video uploads are limited to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB by this app; "
+        "the hosting platform may enforce a lower limit.",
+        413,
+    )
 
 
 @app.post("/known-faces")
