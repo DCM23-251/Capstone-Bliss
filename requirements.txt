@@ -1,0 +1,6 @@
+ultralytics
+face-recognition
+Flask
+numpy
+opencv-contrib-python-headless
+huggingface_hub
