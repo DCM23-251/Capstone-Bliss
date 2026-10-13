@@ -188,14 +188,10 @@ class VisionPipeline:
 
         self.frames_processed = 0
         self.started_at = time.monotonic()
-        self.frame_times = deque(maxlen=100)
         self.processed_at = deque(maxlen=100)
-        self.stage_times = {
-            "yolo_primary_ms": deque(maxlen=100),
-            "yolo_secondary_ms": deque(maxlen=100),
-            "face_recognition_ms": deque(maxlen=100),
-            "kcf_ms": deque(maxlen=100),
-        }
+        self.frame_samples = deque(maxlen=100)
+        self._frame_stage_times = {}
+        self._frame_mode = "detector"
 
     def start(self):
         self.reader_thread = threading.Thread(target=self._read_frames, daemon=True, name="video-reader")
@@ -276,16 +272,23 @@ class VisionPipeline:
                 continue
             last_frame_id = frame_id
             started = time.monotonic()
+            self._frame_stage_times = {}
+            self._frame_mode = "detector"
             try:
                 annotated = self._process_frame(frame)
                 with self.output_lock:
                     self.processed_frame = annotated
                     self.processed_frame_id += 1
                 elapsed = time.monotonic() - started
+                processed_at = time.monotonic()
                 with self.metrics_lock:
                     self.frames_processed += 1
-                    self.frame_times.append(elapsed)
-                    self.processed_at.append(time.monotonic())
+                    self.frame_samples.append({
+                        "elapsed_ms": elapsed * 1000,
+                        "mode": self._frame_mode,
+                        "stage_times": self._frame_stage_times.copy(),
+                    })
+                    self.processed_at.append(processed_at)
             except Exception as exc:
                 self.last_error = str(exc)
                 self.status = "Processing error"
@@ -297,8 +300,7 @@ class VisionPipeline:
 
     def _record_stage_time(self, stage, started):
         elapsed_ms = (time.monotonic() - started) * 1000
-        with self.metrics_lock:
-            self.stage_times[stage].append(elapsed_ms)
+        self._frame_stage_times[stage] = elapsed_ms
 
     def _make_kcf_tracker(self):
         if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerKCF"):
@@ -351,6 +353,7 @@ class VisionPipeline:
             tracked_boxes = self._update_trackers(frame)
             self._record_stage_time("kcf_ms", started)
             if tracked_boxes and self.tracker_frame_count < TRACKER_INTERVAL:
+                self._frame_mode = "kcf"
                 for x1, y1, x2, y2 in tracked_boxes:
                     cv2.rectangle(annotated, (x1, y1), (x2, y2), (255, 0, 255), 2)
                 self._draw_faces(annotated, self.face_detections, "Last verified: ")
@@ -469,13 +472,41 @@ class VisionPipeline:
     def metrics(self):
         now = time.monotonic()
         with self.metrics_lock:
-            average_frame_time = (
-                sum(self.frame_times) / len(self.frame_times) if self.frame_times else 0.0
+            samples = list(self.frame_samples)
+            average_frame_ms = (
+                sum(sample["elapsed_ms"] for sample in samples) / len(samples)
+                if samples else 0.0
             )
-            averages = {
-                name: round(sum(values) / len(values), 2) if values else 0.0
-                for name, values in self.stage_times.items()
-            }
+            stage_names = (
+                "yolo_primary_ms",
+                "yolo_secondary_ms",
+                "face_recognition_ms",
+                "kcf_ms",
+            )
+            stage_averages = {}
+            stage_counts = {}
+            for name in stage_names:
+                values = [
+                    sample["stage_times"][name]
+                    for sample in samples
+                    if name in sample["stage_times"]
+                ]
+                stage_averages[name] = round(sum(values) / len(values), 2) if values else 0.0
+                stage_counts[name] = len(values)
+            detector_samples = [
+                sample for sample in samples if sample["mode"] == "detector"
+            ]
+            kcf_samples = [
+                sample for sample in samples if sample["mode"] == "kcf"
+            ]
+            detector_average_ms = (
+                sum(sample["elapsed_ms"] for sample in detector_samples) / len(detector_samples)
+                if detector_samples else 0.0
+            )
+            kcf_average_ms = (
+                sum(sample["elapsed_ms"] for sample in kcf_samples) / len(kcf_samples)
+                if kcf_samples else 0.0
+            )
             observed_fps = 0.0
             if len(self.processed_at) > 1:
                 elapsed = self.processed_at[-1] - self.processed_at[0]
@@ -489,10 +520,16 @@ class VisionPipeline:
                 "elapsed_seconds": round(now - self.started_at, 1),
                 "processing_fps": round(observed_fps, 2),
                 "estimated_processing_capacity_fps": (
-                    round(1.0 / average_frame_time, 2) if average_frame_time else 0.0
+                    round(1000.0 / average_frame_ms, 2) if average_frame_ms else 0.0
                 ),
-                "average_frame_ms": round(average_frame_time * 1000, 2),
-                "stage_average_ms": averages,
+                "average_frame_ms": round(average_frame_ms, 2),
+                "measurement_window_frames": len(samples),
+                "detector_frames_in_window": len(detector_samples),
+                "kcf_frames_in_window": len(kcf_samples),
+                "detector_frame_average_ms": round(detector_average_ms, 2),
+                "kcf_frame_average_ms": round(kcf_average_ms, 2),
+                "stage_average_ms": stage_averages,
+                "stage_sample_counts": stage_counts,
                 "known_face_images": len(self.known_encodings),
             }
 
@@ -550,13 +587,19 @@ PAGE = """<!doctype html>
       const data = await response.json();
       const rows = [
         ['Status', data.status], ['Source', data.source || 'Not set'],
-        ['Processed frames', data.frames_processed], ['Observed processing FPS', data.processing_fps],
+        ['Processed frames (total)', data.frames_processed],
+        ['Recent measured window', data.measurement_window_frames + ' output frames'],
+        ['Recent observed output FPS', data.processing_fps],
         ['Estimated processing capacity', data.estimated_processing_capacity_fps + ' FPS'],
-        ['Average frame time', data.average_frame_ms + ' ms'],
-        ['YOLO primary average', data.stage_average_ms.yolo_primary_ms + ' ms'],
-        ['YOLO secondary average', data.stage_average_ms.yolo_secondary_ms + ' ms'],
-        ['Face recognition average', data.stage_average_ms.face_recognition_ms + ' ms'],
-        ['KCF average', data.stage_average_ms.kcf_ms + ' ms'],
+        ['Average processing time / output frame', data.average_frame_ms + ' ms'],
+        ['Detector frames in window', data.detector_frames_in_window],
+        ['Average full detector-frame time', data.detector_frame_average_ms + ' ms'],
+        ['KCF-only frames in window', data.kcf_frames_in_window],
+        ['Average KCF-frame time', data.kcf_frame_average_ms + ' ms'],
+        ['YOLO primary average / calls', data.stage_average_ms.yolo_primary_ms + ' ms / ' + data.stage_sample_counts.yolo_primary_ms],
+        ['YOLO secondary average / calls', data.stage_average_ms.yolo_secondary_ms + ' ms / ' + data.stage_sample_counts.yolo_secondary_ms],
+        ['Face recognition average / calls', data.stage_average_ms.face_recognition_ms + ' ms / ' + data.stage_sample_counts.face_recognition_ms],
+        ['KCF update average / calls', data.stage_average_ms.kcf_ms + ' ms / ' + data.stage_sample_counts.kcf_ms],
         ['Known face images', data.known_face_images]
       ];
       const metrics = document.getElementById('metrics');
@@ -699,7 +742,18 @@ def status():
             "processing_fps": 0,
             "estimated_processing_capacity_fps": 0,
             "average_frame_ms": 0,
+            "measurement_window_frames": 0,
+            "detector_frames_in_window": 0,
+            "kcf_frames_in_window": 0,
+            "detector_frame_average_ms": 0,
+            "kcf_frame_average_ms": 0,
             "stage_average_ms": {
+                "yolo_primary_ms": 0,
+                "yolo_secondary_ms": 0,
+                "face_recognition_ms": 0,
+                "kcf_ms": 0,
+            },
+            "stage_sample_counts": {
                 "yolo_primary_ms": 0,
                 "yolo_secondary_ms": 0,
                 "face_recognition_ms": 0,

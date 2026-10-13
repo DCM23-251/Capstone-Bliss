@@ -42,6 +42,6 @@ Useful environment overrides:
 | `KNOWN_FACES_DIR` | `known_faces` | Directory for named reference-face subfolders |
 | `MAX_UPLOAD_MB` | `512` | Maximum uploaded video size |
 
-The status endpoint and page report observed processed FPS, estimated processing capacity, frame latency, and rolling average timings for both YOLO passes, face recognition, and KCF. These are process-level benchmark measurements, not Railway billing/credit estimates.
+The status endpoint and page report recent observed output FPS and a rolling window of up to 100 processed frames. Frame latency averages include both full detector frames and KCF-only frames; the UI reports their counts and separate average latencies. Each stage average is per invocation within that same output-frame window, with its sample count shown, so stage averages should not be summed as if every stage ran on every frame. Estimated processing capacity is the reciprocal of mean processing time per output frame; observed FPS is based on wall-clock intervals between completed frames and can be lower due to source/network stalls. These are process-level benchmark measurements, not Railway billing/credit estimates.
 
 This minimal test UI has no authentication. Use it only in a private test deployment and avoid exposing camera feeds or face-reference images publicly. Uploaded videos and reference images are stored on the container filesystem.
